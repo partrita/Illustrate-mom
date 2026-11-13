@@ -591,3 +591,6 @@ body {
 
 .export-summary { margin: 8px 0 16px; color: var(--text-muted); font-size: 12px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.pdb-id-input { width: 84px; text-transform: uppercase; }
+.onboarding-steps { margin: 0 0 16px; padding-left: 20px; max-width: 380px; line-height: 1.5; }

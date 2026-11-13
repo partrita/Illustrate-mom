@@ -24,6 +24,8 @@
     <div class="toolbar-group">
       <button id="btn-load-pdb" class="btn btn-secondary" title="Open a PDB or mmCIF coordinate file">Load PDB / mmCIF…</button>
       <button id="btn-load-inp" class="btn btn-secondary" title="Open an Illustrate .inp command deck">Load .inp…</button>
+      <input id="pdb-id" class="select pdb-id-input" type="text" maxlength="4" placeholder="PDB ID" title="Download from RCSB by PDB ID (e.g. 2HHB)" spellcheck="false" />
+      <button id="btn-fetch-pdb" class="btn btn-secondary" title="Download structure from RCSB">Fetch</button>
       <input id="file-input-structure" type="file" accept=".pdb,.ent,.cif,.mmcif" class="hidden" />
       <input id="file-input-inp" type="file" accept=".inp,.txt" class="hidden" />
     </div>
@@ -356,6 +358,20 @@
       <div class="dialog-actions">
         <button id="btn-export-cancel" class="btn btn-secondary">Cancel</button>
         <button id="btn-export-confirm" class="btn btn-primary">Export…</button>
+      </div>
+    </div>
+  </div>
+  <div id="onboarding-dialog" class="help-dialog hidden" role="dialog" aria-label="Welcome">
+    <div class="help-card">
+      <h2>Welcome to Molecule of the Month</h2>
+      <ol class="onboarding-steps">
+        <li><strong>Load a structure</strong> — type a PDB ID (e.g. 2HHB) and press Fetch, or drop a file on the canvas.</li>
+        <li><strong>Move around</strong> — drag to rotate, Shift+drag to pan, scroll to zoom.</li>
+        <li><strong>Pick a style</strong> — click a preset card; press <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo.</li>
+        <li><strong>Export</strong> — <kbd>Ctrl</kbd>+<kbd>E</kbd> opens PNG size and DPI options. Press <kbd>?</kbd> for all shortcuts.</li>
+      </ol>
+      <div class="dialog-actions">
+        <button id="btn-onboarding-close" class="btn btn-primary">Got it</button>
       </div>
     </div>
   </div>

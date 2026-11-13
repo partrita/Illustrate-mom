@@ -16,8 +16,10 @@ use illustrate::render::{
 };
 use illustrate::transform::Matrix4;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
+
+pub mod fetch;
 
 const DEFAULT_INP: &str = include_str!("../../../examples/2hhb.inp");
 const DEFAULT_PDB: &str = include_str!("../../../examples/2hhb.pdb");
@@ -145,6 +147,20 @@ pub struct SessionSnapshot {
     pub deck: GuiDeckState,
     pub chains: Vec<char>,
     pub render: RenderResponse,
+    /// Identifier of the style preset most recently applied (e.g. `goodsell_classic`).
+    pub preset: String,
+}
+
+/// Current on-disk session format version (see ADR-0005).
+const SESSION_VERSION: u32 = 1;
+
+/// Serializable form of a [`StudioSession`] stored as `session.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedSession {
+    version: u32,
+    pdb_text: String,
+    deck: GuiDeckState,
+    preset: String,
 }
 
 /// Identifiers of the built-in style presets shown in the preset gallery.
@@ -154,6 +170,19 @@ pub const PRESET_IDS: &[&str] = &[
     "monochrome_1992",
     "cpk_soft",
 ];
+
+/// Preset applied to freshly loaded sessions.
+const DEFAULT_PRESET: &str = "goodsell_classic";
+
+/// Maps any identifier to a known preset id (unknown ids fall back to the default).
+fn canonical_preset_id(id: &str) -> String {
+    PRESET_IDS
+        .iter()
+        .find(|known| **known == id)
+        .copied()
+        .unwrap_or(DEFAULT_PRESET)
+        .to_string()
+}
 
 /// Linear downscale factor applied to preset gallery thumbnails.
 const THUMB_FACTOR: f32 = 0.25;
@@ -196,6 +225,8 @@ pub struct StudioSession {
     deck_state: GuiDeckState,
     last_full_deck: Option<CommandDeck>,
     last_full_render: Option<RenderResult>,
+    active_preset: String,
+    startup_notice: Option<String>,
 }
 
 impl StudioSession {
@@ -224,6 +255,8 @@ impl StudioSession {
             deck_state,
             last_full_deck: None,
             last_full_render: None,
+            active_preset: DEFAULT_PRESET.to_string(),
+            startup_notice: None,
         }
     }
 
@@ -238,7 +271,79 @@ impl StudioSession {
             deck_state,
             last_full_deck: Some(deck),
             last_full_render: None,
+            active_preset: DEFAULT_PRESET.to_string(),
+            startup_notice: None,
         })
+    }
+
+    /// Writes the session to `path` as JSON; does nothing when no structure is loaded.
+    pub fn save_to(&self, path: &Path) -> Result<(), String> {
+        if !self.has_structure() {
+            return Ok(());
+        }
+        let persisted = PersistedSession {
+            version: SESSION_VERSION,
+            pdb_text: self.pdb_text.clone(),
+            deck: self.deck_state.clone(),
+            preset: self.active_preset.clone(),
+        };
+        let json = serde_json::to_string(&persisted).map_err(|e| e.to_string())?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::write(path, json).map_err(|e| e.to_string())
+    }
+
+    /// Reads a session previously written by [`StudioSession::save_to`].
+    pub fn restore_from(path: &Path) -> Result<Self, String> {
+        let json = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let persisted: PersistedSession =
+            serde_json::from_str(&json).map_err(|e| format!("corrupt session file: {e}"))?;
+        if persisted.version != SESSION_VERSION {
+            return Err(format!("unsupported session version {}", persisted.version));
+        }
+        if persisted.pdb_text.trim().is_empty() {
+            return Err("session file contains no structure".to_string());
+        }
+        persisted.deck.to_command_deck()?;
+        let chains = inspect_pdb_chains(&persisted.pdb_text);
+        Ok(Self {
+            pdb_text: persisted.pdb_text,
+            chains,
+            deck_state: persisted.deck,
+            last_full_deck: None,
+            last_full_render: None,
+            active_preset: persisted.preset,
+            startup_notice: None,
+        })
+    }
+
+    /// Builds the startup session: restores `path` if possible, otherwise the bundled example.
+    ///
+    /// A missing file silently yields the example; a broken one also sets a startup notice.
+    #[must_use]
+    pub fn startup(path: Option<&Path>) -> Self {
+        let mut notice = None;
+        if let Some(path) = path
+            && path.exists()
+        {
+            match Self::restore_from(path) {
+                Ok(session) => return session,
+                Err(e) => {
+                    notice = Some(format!(
+                        "Could not restore the last session ({e}); opened the example instead."
+                    ));
+                }
+            }
+        }
+        let mut session = Self::new_default().unwrap_or_else(|_| Self::new_empty());
+        session.startup_notice = notice;
+        session
+    }
+
+    /// Returns and clears the pending startup notice, if any.
+    pub fn take_startup_notice(&mut self) -> Option<String> {
+        self.startup_notice.take()
     }
 
     /// Returns `true` if molecular structure data has been loaded into the session.
@@ -338,6 +443,7 @@ impl StudioSession {
             deck,
             chains: self.chains.clone(),
             render,
+            preset: self.active_preset.clone(),
         })
     }
 
@@ -383,6 +489,7 @@ impl StudioSession {
         self.pdb_text = pdb_content;
         self.chains = chains;
         self.last_full_render = None;
+        self.active_preset = canonical_preset_id(preset_id);
         self.deck_state = GuiDeckState {
             pdb_name: filename,
             descriptors: preset
@@ -498,6 +605,7 @@ impl StudioSession {
             .collect();
         self.deck_state.world = preset.world;
         self.deck_state.outline = preset.outline;
+        self.active_preset = canonical_preset_id(preset_id);
         self.snapshot()
     }
 
@@ -557,6 +665,37 @@ fn get_initial_state(state: State<'_, AppState>) -> Result<Option<SessionSnapsho
         return Ok(None);
     }
     session.snapshot().map(Some)
+}
+
+/// Filesystem location of `session.json`, managed as Tauri state.
+pub struct SessionPath(pub Option<PathBuf>);
+
+#[tauri::command]
+fn take_startup_notice(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(session.take_startup_notice())
+}
+
+#[tauri::command]
+async fn fetch_pdb_id(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    preset: String,
+) -> Result<SessionSnapshot, String> {
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("pdb");
+    let fetched = tauri::async_runtime::spawn_blocking(move || {
+        fetch::fetch_structure(&id, &cache_dir, &fetch::http_fetch)
+    })
+    .await
+    .map_err(|e| format!("download task failed: {e}"))??;
+
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.load_pdb(fetched.filename, fetched.content, &preset)
 }
 
 #[tauri::command]
@@ -746,12 +885,35 @@ async fn pick_and_export_png(
 
 /// Launches the **Molecule of the Month** Tauri v2 desktop application.
 pub fn run() {
-    let session = StudioSession::new_empty();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState(Mutex::new(session)))
+        .setup(|app| {
+            let session_path = app
+                .path()
+                .app_data_dir()
+                .ok()
+                .map(|dir| dir.join("session.json"));
+            let session = StudioSession::startup(session_path.as_deref());
+            app.manage(AppState(Mutex::new(session)));
+            app.manage(SessionPath(session_path));
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let app = window.app_handle();
+                if let (Some(state), Some(path)) = (
+                    app.try_state::<AppState>(),
+                    app.try_state::<SessionPath>().and_then(|p| p.0.clone()),
+                ) && let Ok(session) = state.0.lock()
+                {
+                    let _ = session.save_to(&path);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_initial_state,
+            take_startup_notice,
+            fetch_pdb_id,
             reset_default_2hhb,
             render_scene,
             parse_and_render_script,
@@ -777,6 +939,36 @@ mod tests {
         let mut session = StudioSession::new_empty();
         assert!(!session.has_structure());
         assert!(session.snapshot().is_err());
+    }
+
+    #[test]
+    fn session_round_trips_through_disk() {
+        let path = std::env::temp_dir().join("illustrate_session_roundtrip.json");
+        let mut session = StudioSession::new_default().expect("default session");
+        session.deck_state.euler_deg = [10.0, 20.0, 30.0];
+        session.active_preset = "cpk_soft".to_string();
+        session.save_to(&path).expect("save");
+
+        let restored = StudioSession::startup(Some(&path));
+        assert_eq!(restored.deck_state.euler_deg, [10.0, 20.0, 30.0]);
+        assert_eq!(restored.active_preset, "cpk_soft");
+        assert!(restored.has_structure());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn broken_session_falls_back_to_example_with_notice() {
+        let path = std::env::temp_dir().join("illustrate_session_broken.json");
+        fs::write(&path, "{ not json").expect("write");
+        let mut session = StudioSession::startup(Some(&path));
+        assert!(session.has_structure());
+        assert!(session.take_startup_notice().is_some());
+        assert!(session.take_startup_notice().is_none());
+        let _ = fs::remove_file(&path);
+
+        let mut fresh = StudioSession::startup(Some(Path::new("/nonexistent/session.json")));
+        assert!(fresh.has_structure());
+        assert!(fresh.take_startup_notice().is_none());
     }
 
     #[test]

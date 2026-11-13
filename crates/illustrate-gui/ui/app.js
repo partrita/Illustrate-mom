@@ -420,6 +420,7 @@ async function applyPreset(id) {
 function applySnapshot(snapshot, shouldFit = false) {
   state.deck = snapshot.deck;
   state.chains = snapshot.chains;
+  if (snapshot.preset) setActivePreset(snapshot.preset);
   syncControlsFromDeck();
   updateViewportImage(snapshot.render);
   if (shouldFit) {
@@ -690,6 +691,37 @@ function bindControls() {
   el("btn-empty-load-pdb").onclick = handleOpenStructure;
   el("btn-load-inp").onclick = handleOpenScript;
 
+  const fetchPdbId = async () => {
+    const id = el("pdb-id").value.trim();
+    if (!id) {
+      el("pdb-id").focus();
+      return;
+    }
+    el("btn-fetch-pdb").disabled = true;
+    setStatus(`Downloading ${id.toUpperCase()} from RCSB…`);
+    try {
+      const snap = await invoke("fetch_pdb_id", {
+        id,
+        preset: el("select-preset").value,
+      });
+      applySnapshot(snap, true);
+      setStatus(`Loaded ${snap.deck.pdb_name}`);
+    } catch (err) {
+      setStatus(`Download failed: ${err}`);
+    } finally {
+      el("btn-fetch-pdb").disabled = false;
+    }
+  };
+  el("btn-fetch-pdb").onclick = fetchPdbId;
+  el("pdb-id").onkeydown = (e) => {
+    if (e.key === "Enter") fetchPdbId();
+  };
+
+  el("btn-onboarding-close").onclick = () => {
+    localStorage.setItem("onboarded", "1");
+    el("onboarding-dialog").classList.add("hidden");
+  };
+
   el("file-input-structure").onchange = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -829,6 +861,7 @@ function bindControls() {
     } else if (e.key === "Escape") {
       toggleHelp(false);
       toggleExport(false);
+      el("onboarding-dialog").classList.add("hidden");
     }
   });
 
@@ -940,11 +973,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (snap) {
       applySnapshot(snap, true);
       setStatus("Ready — drag canvas to rotate, Shift+drag to pan, scroll to zoom");
+      const notice = await invoke("take_startup_notice");
+      if (notice) setStatus(notice);
     } else {
       syncEmptyState();
       setStatus("Open a .pdb, .cif, .mmcif, or .inp file to begin");
     }
   } catch (err) {
     setStatus(`Initialization error: ${err}`);
+  }
+  if (!localStorage.getItem("onboarded")) {
+    el("onboarding-dialog").classList.remove("hidden");
   }
 });
