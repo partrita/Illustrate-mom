@@ -1,0 +1,25 @@
+[workspace]
+members = [".", "crates/illustrate-gui"]
+resolver = "2"
+
+[package]
+name = "illustrate"
+version = "0.1.0"
+edition = "2024"
+authors = ["David S. Goodsell (original Fortran)", "Illustrate Rust Contributors"]
+license = "Apache-2.0"
+description = "Biomolecular non-photorealistic renderer ported from David S. Goodsell's Fortran Illustrate"
+repository = "https://github.com/ccsb-scripps/Illustrate"
+readme = "README.md"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+png = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

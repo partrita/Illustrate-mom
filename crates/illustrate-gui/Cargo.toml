@@ -1,0 +1,28 @@
+[package]
+name = "illustrate-gui"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Molecule of the Month — Tauri v2 Biomolecular Illustration Studio"
+
+[[bin]]
+name = "molecule-of-the-month"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+illustrate = { path = "../.." }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = "2.11"
+tauri-plugin-dialog = "2.7"
+
+[build-dependencies]
+png = "0.17"
+tauri-build = "2.6"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

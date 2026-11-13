@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Molecule of the Month — Biomolecular Illustration Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <span class="dot d1"></span>
+        <span class="dot d2"></span>
+        <span class="dot d3"></span>
+        <span class="dot d4"></span>
+      </div>
+      <div>
+        <h1>Molecule of the Month</h1>
+        <p class="subtitle">Goodsell Biomolecular Illustration Studio</p>
+      </div>
+    </div>
+
+    <div class="toolbar-group">
+      <button id="btn-load-pdb" class="btn btn-secondary" title="Open a PDB or mmCIF coordinate file">Load PDB / mmCIF…</button>
+      <button id="btn-load-inp" class="btn btn-secondary" title="Open an Illustrate .inp command deck">Load .inp…</button>
+      <input id="file-input-structure" type="file" accept=".pdb,.ent,.cif,.mmcif" class="hidden" />
+      <input id="file-input-inp" type="file" accept=".inp,.txt" class="hidden" />
+    </div>
+
+    <div class="toolbar-group">
+      <label class="inline-label" for="select-preset">Style Preset</label>
+      <select id="select-preset" class="select">
+        <option value="goodsell_classic">Goodsell Classic (2HHB)</option>
+        <option value="subunit_pastel">Subunit Pastel Palette</option>
+        <option value="monochrome_1992">1992 JMolGraphics Ink</option>
+        <option value="cpk_soft">CPK Soft Elements</option>
+      </select>
+      <button id="btn-apply-preset" class="btn btn-secondary">Apply</button>
+    </div>
+
+    <div class="toolbar-group">
+      <div class="segmented" role="group" aria-label="Viewport Layer">
+        <button class="seg-btn active" data-layer="rgba">RGBA</button>
+        <button class="seg-btn" data-layer="rgb">RGB</button>
+        <button class="seg-btn" data-layer="opacity">Opacity</button>
+      </div>
+    </div>
+
+    <div class="toolbar-group">
+      <button id="btn-export-png" class="btn btn-primary">Export PNG</button>
+      <button id="btn-export-pnm" class="btn btn-secondary">Export PNM</button>
+      <button id="btn-export-inp" class="btn btn-secondary">Export .inp</button>
+      <button id="btn-theme" class="btn btn-ghost" title="Toggle light/dark workspace">☀/☾</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <!-- Left Inspector Panel (with Atom Rules & Command Deck nested inside collapsed accordions) -->
+    <aside class="panel panel-left">
+      <details open class="accordion">
+        <summary>Camera &amp; Transform</summary>
+        <div class="section-body">
+          <div class="control-row">
+            <label for="xrot">X Rotation (°)</label>
+            <div class="slider-pair">
+              <input id="xrot" type="range" min="-180" max="180" step="1" value="0" />
+              <input id="xrot-num" type="number" min="-180" max="180" step="0.5" value="0.0" class="num-input" />
+            </div>
+          </div>
+          <div class="control-row">
+            <label for="yrot">Y Rotation (°)</label>
+            <div class="slider-pair">
+              <input id="yrot" type="range" min="-180" max="180" step="1" value="0" />
+              <input id="yrot-num" type="number" min="-180" max="180" step="0.5" value="0.0" class="num-input" />
+            </div>
+          </div>
+          <div class="control-row">
+            <label for="zrot">Z Rotation (°)</label>
+            <div class="slider-pair">
+              <input id="zrot" type="range" min="-180" max="180" step="1" value="0" />
+              <input id="zrot-num" type="number" min="-180" max="180" step="0.5" value="0.0" class="num-input" />
+            </div>
+          </div>
+          <div class="control-row">
+            <label for="scale">Scale (px / Å)</label>
+            <div class="slider-pair">
+              <input id="scale" type="range" min="1" max="36" step="0.5" value="12" />
+              <input id="scale-num" type="number" min="0.5" max="100" step="0.5" value="12.0" class="num-input" />
+            </div>
+          </div>
+          <div class="control-grid-2">
+            <div>
+              <label for="center-mode">Centering</label>
+              <select id="center-mode" class="select full">
+                <option value="Auto">Auto (No Clip)</option>
+                <option value="Center">Center (XYZ)</option>
+                <option value="None">None</option>
+              </select>
+            </div>
+            <div>
+              <label for="tran-z">Z Shift (Å)</label>
+              <input id="tran-z" type="number" step="1" value="0" class="num-input full" />
+            </div>
+          </div>
+          <div class="control-grid-2">
+            <div>
+              <label for="tran-x">X Shift (Å)</label>
+              <input id="tran-x" type="number" step="0.5" value="0" class="num-input full" />
+            </div>
+            <div>
+              <label for="tran-y">Y Shift (Å)</label>
+              <input id="tran-y" type="number" step="0.5" value="0" class="num-input full" />
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details open class="accordion">
+        <summary>World, Fog &amp; Canvas</summary>
+        <div class="section-body">
+          <div class="control-grid-2">
+            <div class="color-field">
+              <label for="rback-color">Background</label>
+              <input id="rback-color" type="color" value="#ffffff" />
+            </div>
+            <div class="color-field">
+              <label for="rfog-color">Fog Color</label>
+              <input id="rfog-color" type="color" value="#ffffff" />
+            </div>
+          </div>
+          <div class="control-row">
+            <label for="pfogh">Fog Front (pfogh)</label>
+            <div class="slider-pair">
+              <input id="pfogh" type="range" min="0" max="1" step="0.02" value="1" />
+              <input id="pfogh-num" type="number" min="0" max="1" step="0.02" value="1.0" class="num-input" />
+            </div>
+          </div>
+          <div class="control-row">
+            <label for="pfogl">Fog Back (pfogl)</label>
+            <div class="slider-pair">
+              <input id="pfogl" type="range" min="0" max="1" step="0.02" value="1" />
+              <input id="pfogl-num" type="number" min="0" max="1" step="0.02" value="1.0" class="num-input" />
+            </div>
+          </div>
+          <div class="control-grid-2">
+            <div>
+              <label for="ixsize">Height / Pad X</label>
+              <input id="ixsize" type="number" step="2" value="-30" class="num-input full" title="Negative = auto padding" />
+            </div>
+            <div>
+              <label for="iysize">Width / Pad Y</label>
+              <input id="iysize" type="number" step="2" value="-30" class="num-input full" title="Negative = auto padding" />
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details open class="accordion">
+        <summary>Conical Soft Shadows</summary>
+        <div class="section-body">
+          <label class="checkbox-row">
+            <input id="icone" type="checkbox" checked />
+            <span>Enable Conical Ambient Occlusion</span>
+          </label>
+          <div class="control-row">
+            <label for="pcone">Shadow Density (pcone)</label>
+            <div class="slider-pair">
+              <input id="pcone" type="range" min="0" max="0.02" step="0.0001" value="0.0023" />
+              <input id="pcone-num" type="number" min="0" max="1" step="0.0005" value="0.0023" class="num-input" />
+            </div>
+          </div>
+          <div class="control-row">
+            <label for="coneangle">Cone Tightness</label>
+            <div class="slider-pair">
+              <input id="coneangle" type="range" min="0.2" max="5" step="0.1" value="2.0" />
+              <input id="coneangle-num" type="number" min="0.1" max="10" step="0.1" value="2.0" class="num-input" />
+            </div>
+          </div>
+          <div class="control-grid-2">
+            <div>
+              <label for="rcone">Min Z Diff (Å)</label>
+              <input id="rcone" type="number" min="0" max="10" step="0.1" value="1.0" class="num-input full" />
+            </div>
+            <div>
+              <label for="pshadowmax">Max Darkness</label>
+              <input id="pshadowmax" type="number" min="0" max="1" step="0.05" value="0.2" class="num-input full" />
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details open class="accordion">
+        <summary>Goodsell Outlines</summary>
+        <div class="section-body">
+          <label class="checkbox-row">
+            <input id="outline-enabled" type="checkbox" checked />
+            <span>Enable Ink Outlines</span>
+          </label>
+          <div class="control-row">
+            <label for="ikernel">Derivative Kernel</label>
+            <select id="ikernel" class="select full">
+              <option value="1">Kernel 1 (3×3 Crisp)</option>
+              <option value="2">Kernel 2 (5×5 Laplacian)</option>
+              <option value="3">Kernel 3 (Z-Diff 3×3)</option>
+              <option value="4" selected>Kernel 4 (5×5 Smoothest)</option>
+            </select>
+          </div>
+          <div class="control-grid-2">
+            <div>
+              <label for="l-low">Contour Low</label>
+              <input id="l-low" type="number" step="0.5" value="3.0" class="num-input full" />
+            </div>
+            <div>
+              <label for="l-high">Contour High</label>
+              <input id="l-high" type="number" step="0.5" value="10.0" class="num-input full" />
+            </div>
+          </div>
+          <div class="control-grid-2">
+            <div>
+              <label for="l-diff-min">Z-Diff Min (Å)</label>
+              <input id="l-diff-min" type="number" step="0.5" value="0.0" class="num-input full" />
+            </div>
+            <div>
+              <label for="l-diff-max">Z-Diff Max (Å)</label>
+              <input id="l-diff-max" type="number" step="0.5" value="5.0" class="num-input full" />
+            </div>
+          </div>
+          <div class="control-grid-2">
+            <div>
+              <label for="r-low">Subunit Low</label>
+              <input id="r-low" type="number" step="0.5" value="3.0" class="num-input full" />
+            </div>
+            <div>
+              <label for="r-high">Subunit High</label>
+              <input id="r-high" type="number" step="0.5" value="10.0" class="num-input full" />
+            </div>
+          </div>
+          <div class="control-grid-2">
+            <div>
+              <label for="g-low">Residue Low</label>
+              <input id="g-low" type="number" step="0.5" value="3.0" class="num-input full" />
+            </div>
+            <div>
+              <label for="g-high">Residue High</label>
+              <input id="g-high" type="number" step="0.5" value="8.0" class="num-input full" />
+            </div>
+          </div>
+          <div class="control-row">
+            <label for="resdiff">Residue Gap Threshold (resdiff)</label>
+            <input id="resdiff" type="number" step="1" value="6000" class="num-input full" />
+          </div>
+        </div>
+      </details>
+
+      <details class="accordion">
+        <summary>Atom Selection &amp; Color Rules</summary>
+        <div class="section-body section-rules">
+          <div class="rules-header">
+            <span>First matching rule sets color &amp; radius (<code>0.0</code> = omit)</span>
+            <button id="btn-add-rule" class="btn btn-xs btn-primary">+ Add</button>
+          </div>
+          <div id="rules-list" class="rules-list"></div>
+        </div>
+      </details>
+
+      <details class="accordion">
+        <summary>Command Deck Script (.inp)</summary>
+        <div class="section-body section-script">
+          <div class="rules-header">
+            <span>Bidirectional Fortran-compatible deck</span>
+            <div class="toolbar-group">
+              <button id="btn-copy-script" class="btn btn-xs btn-secondary">Copy</button>
+              <button id="btn-apply-script" class="btn btn-xs btn-primary">Apply</button>
+            </div>
+          </div>
+          <textarea id="script-editor" class="script-editor" spellcheck="false" placeholder="Load a structure or .inp script to inspect/edit the command deck..."></textarea>
+        </div>
+      </details>
+    </aside>
+
+    <!-- Center Interactive Viewport -->
+    <section class="viewport-area">
+      <div class="viewport-hud">
+        <span id="hud-file" class="pill">No file loaded</span>
+        <span id="hud-chains" class="pill">Chains: —</span>
+        <div class="hud-spacer"></div>
+        <button id="btn-zoom-fit" class="btn btn-xs">Fit</button>
+        <button id="btn-zoom-100" class="btn btn-xs">100%</button>
+        <button id="btn-render-full" class="btn btn-xs btn-primary">Render Full</button>
+      </div>
+
+      <div id="stage" class="viewport-stage" title="Drag to rotate • Shift+Drag to pan • Wheel to zoom • Drop .pdb/.cif/.mmcif/.inp files">
+        <img id="render-img" class="hidden" alt="Rendered molecular illustration" draggable="false" />
+        <div id="empty-state" class="empty-state">
+          <div class="empty-card">
+            <h2>Molecule of the Month Studio</h2>
+            <p>Open a <code>.pdb</code>, <code>.cif</code>, <code>.mmcif</code>, or <code>.inp</code> file to begin, or drag and drop one onto the canvas.</p>
+            <div class="empty-actions">
+              <button id="btn-empty-load-pdb" class="btn btn-primary">Load PDB / mmCIF…</button>
+            </div>
+          </div>
+        </div>
+        <div id="drop-overlay" class="drop-overlay hidden">
+          Drop <code>.pdb</code>, <code>.cif</code>, <code>.mmcif</code>, or <code>.inp</code> file to open
+        </div>
+      </div>
+
+      <footer class="statusbar">
+        <span id="status-dims">— × — px</span>
+        <span id="status-atoms">Atoms: 0</span>
+        <span id="status-subunits">Subunits: 0</span>
+        <span id="status-z">Z: —</span>
+        <span id="status-timing" class="badge-mode">Idle</span>
+        <span id="status-msg" class="status-msg">Open a .pdb / .cif / .inp file to begin</span>
+      </footer>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

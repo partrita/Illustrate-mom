@@ -1,0 +1,706 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Instant;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use illustrate::command::{AtomDescriptor, CenterMode, CommandDeck, OutlineParams, WorldParams};
+use illustrate::pdb::{inspect_pdb_chains, parse_pdb_reader, resolve_pdb_path};
+use illustrate::pnm::{encode_png_rgb, encode_png_rgba, save_png_file, save_ppm_file};
+use illustrate::presets::{PresetKind, build_preset};
+use illustrate::render::{RenderResult, render_smooth, smooth_canvas_dimensions};
+use illustrate::transform::Matrix4;
+use serde::{Deserialize, Serialize};
+use tauri::State;
+use tauri_plugin_dialog::DialogExt;
+
+const DEFAULT_INP: &str = include_str!("../../../examples/2hhb.inp");
+const DEFAULT_PDB: &str = include_str!("../../../examples/2hhb.pdb");
+
+/// Editable DTO representation of [`AtomDescriptor`] for JSON IPC with the webview.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AtomDescriptorDto {
+    pub record: String,
+    pub pattern: String,
+    pub res_low: i32,
+    pub res_high: i32,
+    pub color: [f32; 3],
+    pub radius: f32,
+}
+
+impl From<&AtomDescriptor> for AtomDescriptorDto {
+    fn from(d: &AtomDescriptor) -> Self {
+        Self {
+            record: d.record_prefix_str(),
+            pattern: d.pattern_str(),
+            res_low: d.res_range.0,
+            res_high: d.res_range.1,
+            color: d.color,
+            radius: d.radius,
+        }
+    }
+}
+
+impl AtomDescriptorDto {
+    fn to_domain(&self) -> Result<AtomDescriptor, String> {
+        AtomDescriptor::from_strings(
+            &self.record,
+            &self.pattern,
+            (self.res_low, self.res_high),
+            self.color,
+            self.radius,
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+
+/// Complete GUI-editable command deck state with explicit Euler angles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuiDeckState {
+    pub pdb_name: String,
+    pub descriptors: Vec<AtomDescriptorDto>,
+    pub translation: [f32; 3],
+    pub euler_deg: [f32; 3],
+    pub scale: f32,
+    pub center_mode: CenterMode,
+    pub world: WorldParams,
+    pub outline: OutlineParams,
+    pub output_name: String,
+}
+
+impl GuiDeckState {
+    fn from_command_deck(deck: &CommandDeck) -> Self {
+        Self {
+            pdb_name: deck.pdb_path.display().to_string(),
+            descriptors: deck
+                .descriptors
+                .iter()
+                .map(AtomDescriptorDto::from)
+                .collect(),
+            translation: deck.translation,
+            euler_deg: deck.rotation.to_euler_angles_deg(),
+            scale: deck.scale,
+            center_mode: deck.center_mode,
+            world: deck.world.clone(),
+            outline: deck.outline.clone(),
+            output_name: deck
+                .output_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "illustrate.pnm".to_string()),
+        }
+    }
+
+    fn to_command_deck(&self) -> Result<CommandDeck, String> {
+        let descriptors = self
+            .descriptors
+            .iter()
+            .map(AtomDescriptorDto::to_domain)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let rotation =
+            Matrix4::from_euler_angles_deg(self.euler_deg[0], self.euler_deg[1], self.euler_deg[2]);
+
+        Ok(CommandDeck {
+            pdb_path: PathBuf::from(&self.pdb_name),
+            descriptors,
+            translation: self.translation,
+            rotation,
+            scale: self.scale.max(0.5),
+            center_mode: self.center_mode,
+            world: self.world.clone(),
+            outline: self.outline.clone(),
+            output_path: Some(PathBuf::from(&self.output_name)),
+        })
+    }
+}
+
+/// Image buffers and rendering metrics returned to the frontend viewport.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderResponse {
+    pub width: usize,
+    pub height: usize,
+    pub display_width: usize,
+    pub display_height: usize,
+    pub atom_count: usize,
+    pub subunit_count: i32,
+    pub biomat_count: usize,
+    pub z_range: (f32, f32),
+    pub duration_ms: u64,
+    pub fast_preview: bool,
+    pub script: String,
+    pub rgba_data_url: String,
+    pub rgb_data_url: String,
+    pub opacity_data_url: String,
+}
+
+/// Combined state snapshot returned when initializing, loading files, or switching presets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSnapshot {
+    pub deck: GuiDeckState,
+    pub chains: Vec<char>,
+    pub render: RenderResponse,
+}
+
+/// Mutable server-side studio session protected by a `Mutex` in Tauri state.
+pub struct StudioSession {
+    pdb_text: String,
+    chains: Vec<char>,
+    deck_state: GuiDeckState,
+    last_full_deck: Option<CommandDeck>,
+    last_full_render: Option<RenderResult>,
+}
+
+impl StudioSession {
+    /// Initializes an empty session with no loaded structure.
+    #[must_use]
+    pub fn new_empty() -> Self {
+        let preset = build_preset(PresetKind::GoodsellClassic, &[], (-30, -30));
+        let deck_state = GuiDeckState {
+            pdb_name: String::new(),
+            descriptors: preset
+                .descriptors
+                .iter()
+                .map(AtomDescriptorDto::from)
+                .collect(),
+            translation: [0.0, 0.0, 0.0],
+            euler_deg: [0.0, 0.0, 0.0],
+            scale: 12.0,
+            center_mode: CenterMode::Auto,
+            world: preset.world,
+            outline: preset.outline,
+            output_name: "illustrate.pnm".to_string(),
+        };
+        Self {
+            pdb_text: String::new(),
+            chains: Vec::new(),
+            deck_state,
+            last_full_deck: None,
+            last_full_render: None,
+        }
+    }
+
+    /// Initializes a session preloaded with the bundled `2hhb` hemoglobin example.
+    pub fn new_default() -> Result<Self, String> {
+        let deck = CommandDeck::parse(DEFAULT_INP).map_err(|e| e.to_string())?;
+        let chains = inspect_pdb_chains(DEFAULT_PDB);
+        let deck_state = GuiDeckState::from_command_deck(&deck);
+        Ok(Self {
+            pdb_text: DEFAULT_PDB.to_string(),
+            chains,
+            deck_state,
+            last_full_deck: Some(deck),
+            last_full_render: None,
+        })
+    }
+
+    /// Returns `true` if molecular structure data has been loaded into the session.
+    #[must_use]
+    pub fn has_structure(&self) -> bool {
+        !self.pdb_text.trim().is_empty()
+    }
+
+    fn execute_render(
+        &mut self,
+        gui_deck: GuiDeckState,
+        fast_preview: bool,
+    ) -> Result<RenderResponse, String> {
+        if !self.has_structure() {
+            return Err(
+                "No molecular structure loaded. Open a PDB or mmCIF file first.".to_string(),
+            );
+        }
+
+        let start = Instant::now();
+        let full_deck = gui_deck.to_command_deck()?;
+        let script = full_deck.to_script(Some(gui_deck.euler_deg));
+
+        let mut render_deck = full_deck.clone();
+        let preview_factor = if fast_preview { 0.5_f32 } else { 1.0_f32 };
+        if fast_preview {
+            render_deck.scale = (render_deck.scale * preview_factor).max(2.0);
+            render_deck.world.icone = 0;
+            if render_deck.world.ixsize > 0 {
+                render_deck.world.ixsize =
+                    ((render_deck.world.ixsize as f32 * preview_factor) as i32).max(64);
+            } else {
+                render_deck.world.ixsize =
+                    ((render_deck.world.ixsize as f32 * preview_factor) as i32).min(-8);
+            }
+            if render_deck.world.iysize > 0 {
+                render_deck.world.iysize =
+                    ((render_deck.world.iysize as f32 * preview_factor) as i32).max(64);
+            } else {
+                render_deck.world.iysize =
+                    ((render_deck.world.iysize as f32 * preview_factor) as i32).min(-8);
+            }
+        }
+
+        let pdb = parse_pdb_reader(self.pdb_text.as_bytes(), &render_deck.descriptors)
+            .map_err(|e| e.to_string())?;
+        let (display_width, display_height) = if fast_preview {
+            smooth_canvas_dimensions(&full_deck, &pdb).map_err(|e| e.to_string())?
+        } else {
+            (0, 0)
+        };
+        let result = render_smooth(&render_deck, &pdb).map_err(|e| e.to_string())?;
+        let (display_width, display_height) = if fast_preview {
+            (display_width, display_height)
+        } else {
+            (result.width, result.height)
+        };
+
+        let rgba_png = encode_png_rgba(&result).map_err(|e| e.to_string())?;
+        let rgb_png =
+            encode_png_rgb(result.width, result.height, &result.rgb).map_err(|e| e.to_string())?;
+        let op_png = encode_png_rgb(result.width, result.height, &result.opacity)
+            .map_err(|e| e.to_string())?;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let response = RenderResponse {
+            width: result.width,
+            height: result.height,
+            display_width,
+            display_height,
+            atom_count: pdb.atom_count(),
+            subunit_count: pdb.num_subunits,
+            biomat_count: pdb.biomats.len().max(1),
+            z_range: result.z_range,
+            duration_ms,
+            fast_preview,
+            script,
+            rgba_data_url: format!("data:image/png;base64,{}", BASE64.encode(rgba_png)),
+            rgb_data_url: format!("data:image/png;base64,{}", BASE64.encode(rgb_png)),
+            opacity_data_url: format!("data:image/png;base64,{}", BASE64.encode(op_png)),
+        };
+
+        self.deck_state = gui_deck;
+        if !fast_preview {
+            self.last_full_deck = Some(full_deck);
+            self.last_full_render = Some(result);
+        }
+
+        Ok(response)
+    }
+
+    /// Returns a full snapshot of the current session, rendering if needed.
+    pub fn snapshot(&mut self) -> Result<SessionSnapshot, String> {
+        let deck = self.deck_state.clone();
+        let render = self.execute_render(deck.clone(), false)?;
+        Ok(SessionSnapshot {
+            deck,
+            chains: self.chains.clone(),
+            render,
+        })
+    }
+
+    /// Parses a `.inp` script, updates state (optionally swapping structure text), and renders.
+    pub fn load_script(
+        &mut self,
+        script: &str,
+        script_dir: Option<&Path>,
+    ) -> Result<SessionSnapshot, String> {
+        let deck = CommandDeck::parse(script).map_err(|e| e.to_string())?;
+        if let Ok(resolved) = resolve_pdb_path(&deck.pdb_path, script_dir)
+            && let Ok(pdb_content) = fs::read_to_string(&resolved)
+        {
+            self.chains = inspect_pdb_chains(&pdb_content);
+            self.pdb_text = pdb_content;
+        }
+        if !self.has_structure() {
+            return Err(format!(
+                "Could not locate '{}' referenced by the .inp script. Load a PDB/mmCIF structure first.",
+                deck.pdb_path.display()
+            ));
+        }
+        self.last_full_render = None;
+        self.deck_state = GuiDeckState::from_command_deck(&deck);
+        self.snapshot()
+    }
+
+    /// Loads new PDB or mmCIF text and applies the selected Molecule of the Month preset.
+    pub fn load_pdb(
+        &mut self,
+        filename: String,
+        pdb_content: String,
+        preset_id: &str,
+    ) -> Result<SessionSnapshot, String> {
+        let chains = inspect_pdb_chains(&pdb_content);
+        let preset = build_preset(PresetKind::from_id(preset_id), &chains, (-30, -30));
+        let stem = Path::new(&filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("molecule");
+        let output_name = format!("{stem}.pnm");
+
+        self.pdb_text = pdb_content;
+        self.chains = chains;
+        self.last_full_render = None;
+        self.deck_state = GuiDeckState {
+            pdb_name: filename,
+            descriptors: preset
+                .descriptors
+                .iter()
+                .map(AtomDescriptorDto::from)
+                .collect(),
+            translation: [0.0, 0.0, 0.0],
+            euler_deg: [0.0, 0.0, 0.0],
+            scale: 12.0,
+            center_mode: CenterMode::Auto,
+            world: preset.world,
+            outline: preset.outline,
+            output_name,
+        };
+
+        self.snapshot()
+    }
+
+    /// Applies a color/outline preset to the current PDB structure while keeping camera settings.
+    pub fn apply_preset(&mut self, preset_id: &str) -> Result<SessionSnapshot, String> {
+        let pad = (self.deck_state.world.ixsize, self.deck_state.world.iysize);
+        let preset = build_preset(PresetKind::from_id(preset_id), &self.chains, pad);
+        self.deck_state.descriptors = preset
+            .descriptors
+            .iter()
+            .map(AtomDescriptorDto::from)
+            .collect();
+        self.deck_state.world = preset.world;
+        self.deck_state.outline = preset.outline;
+        self.snapshot()
+    }
+
+    /// Exports the latest full-resolution render or command script to disk.
+    pub fn export_to_path(&mut self, format: &str, path: &Path) -> Result<String, String> {
+        if self.last_full_render.is_none() {
+            let deck = self.deck_state.clone();
+            self.execute_render(deck, false)?;
+        }
+
+        match format {
+            "png" => {
+                let res = self
+                    .last_full_render
+                    .as_ref()
+                    .ok_or_else(|| "no rendered image available".to_string())?;
+                save_png_file(path, res).map_err(|e| e.to_string())?;
+                Ok(format!("Saved RGBA PNG to {}", path.display()))
+            }
+            "pnm" => {
+                let res = self
+                    .last_full_render
+                    .as_ref()
+                    .ok_or_else(|| "no rendered image available".to_string())?;
+                save_ppm_file(path, res.width, res.height, &res.rgb).map_err(|e| e.to_string())?;
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("illustrate");
+                let opacity_path = path.with_file_name(format!("{stem}_opacity.pnm"));
+                save_ppm_file(&opacity_path, res.width, res.height, &res.opacity)
+                    .map_err(|e| e.to_string())?;
+                Ok(format!(
+                    "Saved PNM to {} and {}",
+                    path.display(),
+                    opacity_path.display()
+                ))
+            }
+            "inp" => {
+                let deck = self.deck_state.to_command_deck()?;
+                let script = deck.to_script(Some(self.deck_state.euler_deg));
+                fs::write(path, script).map_err(|e| e.to_string())?;
+                Ok(format!("Saved command deck to {}", path.display()))
+            }
+            other => Err(format!("unsupported export format '{other}'")),
+        }
+    }
+}
+
+/// Managed Tauri state wrapper.
+pub struct AppState(pub Mutex<StudioSession>);
+
+#[tauri::command]
+fn get_initial_state(state: State<'_, AppState>) -> Result<Option<SessionSnapshot>, String> {
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    if !session.has_structure() {
+        return Ok(None);
+    }
+    session.snapshot().map(Some)
+}
+
+#[tauri::command]
+fn reset_default_2hhb(state: State<'_, AppState>) -> Result<SessionSnapshot, String> {
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    *session = StudioSession::new_default()?;
+    session.snapshot()
+}
+
+#[tauri::command]
+fn render_scene(
+    state: State<'_, AppState>,
+    deck: GuiDeckState,
+    fast_preview: bool,
+) -> Result<RenderResponse, String> {
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.execute_render(deck, fast_preview)
+}
+
+#[tauri::command]
+fn parse_and_render_script(
+    state: State<'_, AppState>,
+    script: String,
+) -> Result<SessionSnapshot, String> {
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.load_script(&script, None)
+}
+
+#[tauri::command]
+fn load_pdb_data(
+    state: State<'_, AppState>,
+    filename: String,
+    content: String,
+    preset: String,
+) -> Result<SessionSnapshot, String> {
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.load_pdb(filename, content, &preset)
+}
+
+#[tauri::command]
+fn apply_color_preset(
+    state: State<'_, AppState>,
+    preset: String,
+) -> Result<SessionSnapshot, String> {
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.apply_preset(&preset)
+}
+
+#[tauri::command]
+fn export_output(
+    state: State<'_, AppState>,
+    format: String,
+    path: String,
+) -> Result<String, String> {
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.export_to_path(&format, Path::new(&path))
+}
+
+#[tauri::command]
+async fn pick_and_load_pdb(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    preset: String,
+) -> Result<Option<SessionSnapshot>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter(
+                "Molecular Structure (PDB / mmCIF)",
+                &["pdb", "ent", "cif", "mmcif", "PDB", "ENT", "CIF", "MMCIF"],
+            )
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("file dialog failed: {e}"))?;
+
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path
+        .into_path()
+        .map_err(|e| format!("invalid file path: {e}"))?;
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let filename = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("structure.pdb")
+        .to_string();
+
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.load_pdb(filename, content, &preset).map(Some)
+}
+
+#[tauri::command]
+async fn pick_and_load_script(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<SessionSnapshot>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Illustrate Command Deck", &["inp", "txt", "INP", "TXT"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("file dialog failed: {e}"))?;
+
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path
+        .into_path()
+        .map_err(|e| format!("invalid file path: {e}"))?;
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let parent = path.parent();
+
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.load_script(&content, parent).map(Some)
+}
+
+#[tauri::command]
+async fn pick_and_export(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    format: String,
+) -> Result<Option<String>, String> {
+    let (filter_name, ext, default_name) = match format.as_str() {
+        "png" => ("PNG Image", "png", "illustration.png"),
+        "pnm" => ("Netpbm PPM", "pnm", "illustration.pnm"),
+        "inp" => ("Illustrate Script", "inp", "illustration.inp"),
+        other => return Err(format!("unsupported format '{other}'")),
+    };
+
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter(filter_name, &[ext])
+            .set_file_name(default_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| format!("export dialog failed: {e}"))?;
+
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path
+        .into_path()
+        .map_err(|e| format!("invalid export path: {e}"))?;
+
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.export_to_path(&format, &path).map(Some)
+}
+
+/// Launches the **Molecule of the Month** Tauri v2 desktop application.
+pub fn run() {
+    let session = StudioSession::new_empty();
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(AppState(Mutex::new(session)))
+        .invoke_handler(tauri::generate_handler![
+            get_initial_state,
+            reset_default_2hhb,
+            render_scene,
+            parse_and_render_script,
+            load_pdb_data,
+            apply_color_preset,
+            export_output,
+            pick_and_load_pdb,
+            pick_and_load_script,
+            pick_and_export,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Molecule of the Month");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_session_starts_without_structure() {
+        let mut session = StudioSession::new_empty();
+        assert!(!session.has_structure());
+        assert!(session.snapshot().is_err());
+    }
+
+    #[test]
+    fn studio_session_renders_default_2hhb_and_switches_presets() {
+        let mut session = StudioSession::new_default().expect("default session");
+        let snap = session.snapshot().expect("initial 2hhb render");
+
+        assert!(snap.render.width >= 900);
+        assert_eq!(snap.render.width, snap.render.height);
+        assert_eq!(snap.render.display_width, snap.render.width);
+        assert_eq!(snap.render.display_height, snap.render.height);
+        assert_eq!(snap.render.atom_count, 4556);
+        assert_eq!(snap.render.subunit_count, 8);
+        assert!(
+            snap.render
+                .rgba_data_url
+                .starts_with("data:image/png;base64,")
+        );
+
+        let mut rotated_deck = snap.deck.clone();
+        rotated_deck.euler_deg = [32.0, -47.0, 115.0];
+        let fast = session
+            .execute_render(rotated_deck.clone(), true)
+            .expect("fast preview render");
+        assert!(fast.fast_preview);
+        assert!(fast.width < snap.render.width);
+        assert_eq!(fast.display_width, snap.render.display_width);
+        assert_eq!(fast.display_height, snap.render.display_height);
+
+        let full_rotated = session
+            .execute_render(rotated_deck, false)
+            .expect("full rotated render");
+        assert_eq!(full_rotated.width, snap.render.width);
+        assert_eq!(full_rotated.height, snap.render.height);
+
+        let mono = session
+            .apply_preset("monochrome_1992")
+            .expect("apply monochrome preset");
+        assert_ne!(mono.render.rgb_data_url, snap.render.rgb_data_url);
+    }
+
+    #[test]
+    fn studio_session_loads_mmcif_structure() {
+        let cif = "\
+data_MINI
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1 C CA . ALA A 1 0.0 0.0 0.0 1 ALA A CA 1
+ATOM 2 N N  . ALA A 1 1.4 0.0 0.0 1 ALA A N  1
+ATOM 3 C CA . GLY B 1 0.0 3.0 0.0 2 GLY B CA 1
+";
+        let mut session = StudioSession::new_empty();
+        let snap = session
+            .load_pdb("mini.cif".to_string(), cif.to_string(), "subunit_pastel")
+            .expect("load mmcif");
+        assert!(session.has_structure());
+        assert_eq!(snap.chains, vec!['A', 'B']);
+        assert_eq!(snap.render.atom_count, 3);
+        assert_eq!(snap.render.subunit_count, 2);
+    }
+
+    #[test]
+    fn studio_session_parses_edited_script_and_exports() {
+        let mut session = StudioSession::new_default().expect("default session");
+        let mut snap = session.snapshot().unwrap();
+        snap.deck.euler_deg = [15.0, -20.0, 45.0];
+        let resp = session.execute_render(snap.deck, false).unwrap();
+
+        let reparsed = session.load_script(&resp.script, None).unwrap();
+        assert_eq!(reparsed.render.atom_count, 4556);
+
+        let tmp = std::env::temp_dir().join(format!("motm_export_{}.png", std::process::id()));
+        let msg = session.export_to_path("png", &tmp).unwrap();
+        assert!(msg.contains("Saved RGBA PNG"));
+        assert!(tmp.exists());
+        let _ = fs::remove_file(&tmp);
+    }
+}
