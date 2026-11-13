@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "illustrate"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["David S. Goodsell (original Fortran)", "Illustrate Rust Contributors"]
 license = "Apache-2.0"

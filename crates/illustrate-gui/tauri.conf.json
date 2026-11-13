@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Molecule of the Month",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "org.rcsb.molecule-of-the-month",
   "build": {
     "frontendDist": "ui"
