@@ -588,3 +588,6 @@ body {
   background: var(--bg-input);
   font-size: 12px;
 }
+
+.export-summary { margin: 8px 0 16px; color: var(--text-muted); font-size: 12px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }

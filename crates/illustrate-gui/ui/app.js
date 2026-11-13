@@ -745,7 +745,59 @@ function bindControls() {
     }
   };
 
-  el("btn-export-png").onclick = () => doExport("png");
+  const EXPORT_MAX = 6000;
+  const exportBaseSize = () => ({
+    w: state.lastRender?.display_width || state.lastRender?.width || 0,
+    h: state.lastRender?.display_height || state.lastRender?.height || 0,
+  });
+  const exportTargetWidth = () => {
+    const mode = el("export-size").value;
+    const base = exportBaseSize();
+    if (mode === "custom") return parseInt(el("export-width").value, 10) || 0;
+    return base.w * Number(mode);
+  };
+  const updateExportSummary = () => {
+    const base = exportBaseSize();
+    const w = exportTargetWidth();
+    const h = base.w > 0 ? Math.round((base.h * w) / base.w) : 0;
+    const valid = w >= 64 && w <= EXPORT_MAX && h <= EXPORT_MAX;
+    el("export-custom-row").classList.toggle("hidden", el("export-size").value !== "custom");
+    el("export-summary").textContent = valid
+      ? `Output: about ${w} × ${h} px at ${el("export-dpi").value} DPI`
+      : `Size must stay within 64–${EXPORT_MAX} px per edge`;
+    el("btn-export-confirm").disabled = !valid;
+  };
+  const toggleExport = (show) => {
+    if (show && !state.deck) {
+      setStatus("Nothing to export — load a PDB or mmCIF file first");
+      return;
+    }
+    if (show) {
+      el("export-width").value = exportBaseSize().w;
+      updateExportSummary();
+    }
+    el("export-dialog").classList.toggle("hidden", !show);
+  };
+  ["export-size", "export-width", "export-dpi"].forEach((id) => {
+    el(id).oninput = updateExportSummary;
+  });
+  el("btn-export-png").onclick = () => toggleExport(true);
+  el("btn-export-cancel").onclick = () => toggleExport(false);
+  el("btn-export-confirm").onclick = async () => {
+    const options = {
+      width_px: exportTargetWidth(),
+      transparent: el("export-transparent").checked,
+      dpi: parseInt(el("export-dpi").value, 10),
+    };
+    toggleExport(false);
+    try {
+      setStatus("Rendering export…");
+      const msg = await invoke("pick_and_export_png", { options });
+      setStatus(msg || "Export cancelled");
+    } catch (err) {
+      setStatus(`Export failed: ${err}`);
+    }
+  };
   el("btn-export-pnm").onclick = () => doExport("pnm");
   el("btn-export-inp").onclick = () => doExport("inp");
 
@@ -765,7 +817,7 @@ function bindControls() {
       redo();
     } else if (mod && key === "e") {
       e.preventDefault();
-      doExport("png");
+      toggleExport(true);
     } else if (!mod && !typing && key === "r") {
       if (!state.deck) return;
       state.deck.euler_deg = [0, 0, 0];
@@ -776,6 +828,7 @@ function bindControls() {
       toggleHelp();
     } else if (e.key === "Escape") {
       toggleHelp(false);
+      toggleExport(false);
     }
   });
 

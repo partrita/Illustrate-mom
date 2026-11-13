@@ -7,9 +7,13 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use illustrate::command::{AtomDescriptor, CenterMode, CommandDeck, OutlineParams, WorldParams};
 use illustrate::pdb::{inspect_pdb_chains, parse_pdb_reader, resolve_pdb_path};
-use illustrate::pnm::{encode_png_rgb, encode_png_rgba, save_png_file, save_ppm_file};
+use illustrate::pnm::{
+    encode_png_rgb, encode_png_rgba, encode_png_with_options, save_png_file, save_ppm_file,
+};
 use illustrate::presets::{PresetKind, build_preset};
-use illustrate::render::{RenderResult, render, render_smooth, smooth_canvas_dimensions};
+use illustrate::render::{
+    RenderResult, SMOOTH_MAX_CANVAS, render, render_smooth, smooth_canvas_dimensions,
+};
 use illustrate::transform::Matrix4;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -162,6 +166,20 @@ fn scale_canvas_size(size: i32) -> i32 {
     } else {
         scaled.min(-2)
     }
+}
+
+/// Smallest accepted export width in pixels.
+const MIN_EXPORT_WIDTH: u32 = 64;
+
+/// User-selected PNG export settings from the export dialog.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PngExportOptions {
+    /// Target image width in pixels; `None` exports at the current canvas size (1x).
+    pub width_px: Option<u32>,
+    /// Keep the opacity channel as PNG alpha (`true`) or write an opaque RGB image.
+    pub transparent: bool,
+    /// Print resolution recorded in the PNG `pHYs` chunk.
+    pub dpi: Option<u32>,
 }
 
 /// Small preview image of one preset applied to the current structure.
@@ -382,6 +400,52 @@ impl StudioSession {
         };
 
         self.snapshot()
+    }
+
+    /// Renders the current deck at the requested export size and writes a PNG.
+    ///
+    /// Sizes above the legacy 3000 px limit are produced through the opt-in smooth renderer,
+    /// up to [`SMOOTH_MAX_CANVAS`] pixels per edge.
+    pub fn export_png_with_options(
+        &mut self,
+        path: &Path,
+        options: &PngExportOptions,
+    ) -> Result<String, String> {
+        if !self.has_structure() {
+            return Err("No molecular structure loaded.".to_string());
+        }
+        let mut deck = self.deck_state.to_command_deck()?;
+        let pdb = parse_pdb_reader(self.pdb_text.as_bytes(), &deck.descriptors)
+            .map_err(|e| e.to_string())?;
+        let (base_w, base_h) = smooth_canvas_dimensions(&deck, &pdb).map_err(|e| e.to_string())?;
+
+        let limit = SMOOTH_MAX_CANVAS as u32;
+        let target_w = options.width_px.unwrap_or(base_w as u32);
+        if !(MIN_EXPORT_WIDTH..=limit).contains(&target_w) {
+            return Err(format!(
+                "export width must be between {MIN_EXPORT_WIDTH} and {limit} px"
+            ));
+        }
+        let factor = target_w as f32 / base_w as f32;
+        if (base_h as f32 * factor).round() > limit as f32 {
+            return Err(format!("export height would exceed {limit} px"));
+        }
+        if (factor - 1.0).abs() > f32::EPSILON {
+            deck.scale *= factor;
+            deck.world.ixsize = (deck.world.ixsize as f32 * factor).round() as i32;
+            deck.world.iysize = (deck.world.iysize as f32 * factor).round() as i32;
+        }
+
+        let result = render_smooth(&deck, &pdb).map_err(|e| e.to_string())?;
+        let bytes = encode_png_with_options(&result, options.transparent, options.dpi)
+            .map_err(|e| e.to_string())?;
+        fs::write(path, bytes).map_err(|e| e.to_string())?;
+        Ok(format!(
+            "Saved {}×{} px PNG to {}",
+            result.width,
+            result.height,
+            path.display()
+        ))
     }
 
     /// Renders a small thumbnail of the current structure for every built-in preset.
@@ -653,6 +717,33 @@ async fn pick_and_export(
     session.export_to_path(&format, &path).map(Some)
 }
 
+#[tauri::command]
+async fn pick_and_export_png(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    options: PngExportOptions,
+) -> Result<Option<String>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("PNG Image", &["png"])
+            .set_file_name("illustration.png")
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| format!("export dialog failed: {e}"))?;
+
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path
+        .into_path()
+        .map_err(|e| format!("invalid export path: {e}"))?;
+
+    let mut session = state.0.lock().map_err(|e| e.to_string())?;
+    session.export_png_with_options(&path, &options).map(Some)
+}
+
 /// Launches the **Molecule of the Month** Tauri v2 desktop application.
 pub fn run() {
     let session = StudioSession::new_empty();
@@ -671,6 +762,7 @@ pub fn run() {
             pick_and_load_pdb,
             pick_and_load_script,
             pick_and_export,
+            pick_and_export_png,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Molecule of the Month");
@@ -685,6 +777,38 @@ mod tests {
         let mut session = StudioSession::new_empty();
         assert!(!session.has_structure());
         assert!(session.snapshot().is_err());
+    }
+
+    #[test]
+    fn export_png_honors_size_alpha_and_dpi() {
+        let mut session = StudioSession::new_default().expect("default session");
+        let dir = std::env::temp_dir();
+        let path = dir.join("illustrate_export_options_test.png");
+
+        let opts = PngExportOptions {
+            width_px: Some(400),
+            transparent: false,
+            dpi: Some(300),
+        };
+        session
+            .export_png_with_options(&path, &opts)
+            .expect("export");
+        let bytes = fs::read(&path).expect("read png");
+        let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+        let reader = decoder.read_info().expect("png header");
+        let info = reader.info();
+        assert_eq!(info.color_type, png::ColorType::Rgb);
+        assert!((396..=404).contains(&info.width), "width {}", info.width);
+        let dims = info.pixel_dims.expect("pHYs chunk");
+        assert_eq!(dims.xppu, 11811);
+        let _ = fs::remove_file(&path);
+
+        let too_big = PngExportOptions {
+            width_px: Some(SMOOTH_MAX_CANVAS as u32 + 2),
+            transparent: true,
+            dpi: None,
+        };
+        assert!(session.export_png_with_options(&path, &too_big).is_err());
     }
 
     #[test]

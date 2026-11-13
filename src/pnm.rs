@@ -57,6 +57,49 @@ pub fn encode_png_rgba(result: &RenderResult) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Encodes a PNG with optional transparency and print resolution metadata.
+///
+/// With `transparent` the opacity channel becomes the alpha channel (RGBA); otherwise an opaque
+/// RGB image is written. `dpi` records a `pHYs` chunk. The legacy [`encode_png_rgba`] is unchanged.
+pub fn encode_png_with_options(
+    result: &RenderResult,
+    transparent: bool,
+    dpi: Option<u32>,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, result.width as u32, result.height as u32);
+        encoder.set_color(if transparent {
+            png::ColorType::Rgba
+        } else {
+            png::ColorType::Rgb
+        });
+        encoder.set_depth(png::BitDepth::Eight);
+        if let Some(dpi) = dpi {
+            let ppm = (dpi as f32 / 0.0254).round() as u32;
+            encoder.set_pixel_dims(Some(png::PixelDimensions {
+                xppu: ppm,
+                yppu: ppm,
+                unit: png::Unit::Meter,
+            }));
+        }
+        let mut png_writer = encoder.write_header()?;
+        let pixel_count = result.width * result.height;
+        if transparent {
+            let mut rgba = Vec::with_capacity(pixel_count * 4);
+            for i in 0..pixel_count {
+                let base = i * 3;
+                rgba.extend_from_slice(&result.rgb[base..base + 3]);
+                rgba.push(result.opacity[base]);
+            }
+            png_writer.write_image_data(&rgba)?;
+        } else {
+            png_writer.write_image_data(&result.rgb[..pixel_count * 3])?;
+        }
+    }
+    Ok(out)
+}
+
 /// Encodes an RGB PNG image in memory from row-major `rgb` bytes (`width * height * 3`).
 pub fn encode_png_rgb(width: usize, height: usize, rgb: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();

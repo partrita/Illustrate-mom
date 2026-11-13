@@ -17,6 +17,9 @@ serde_json = "1.0"
 tauri = "2.11"
 tauri-plugin-dialog = "2.7"
 
+[dev-dependencies]
+png = "0.17"
+
 [build-dependencies]
 png = "0.17"
 tauri-build = "2.6"

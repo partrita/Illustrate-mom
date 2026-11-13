@@ -4,6 +4,12 @@ use crate::framebuffer::FrameBuffer;
 use crate::pdb::PdbStructure;
 use crate::transform::BioMatrix;
 
+/// Maximum canvas edge (pixels) of the legacy-compatible [`render`] path.
+pub const LEGACY_MAX_CANVAS: i32 = 3000;
+
+/// Maximum canvas edge (pixels) of the opt-in [`render_smooth`] path.
+pub const SMOOTH_MAX_CANVAS: i32 = 6000;
+
 /// Diagnostics and pixel buffers produced by [`render`].
 #[derive(Debug, Clone)]
 pub struct RenderResult {
@@ -55,8 +61,8 @@ pub fn smooth_canvas_dimensions(deck: &CommandDeck, pdb: &PdbStructure) -> Resul
         iysize = (-2.0_f32 * (iysize as f32) + 2.0_f32 * radius_max + span) as i32;
     }
 
-    ixsize = (ixsize.min(3000) / 2) * 2;
-    iysize = (iysize.min(3000) / 2) * 2;
+    ixsize = (ixsize.min(SMOOTH_MAX_CANVAS) / 2) * 2;
+    iysize = (iysize.min(SMOOTH_MAX_CANVAS) / 2) * 2;
     if ixsize <= 0 || iysize <= 0 {
         return Err(IllustrateError::InvalidDimensions {
             width: iysize.max(0) as usize,
@@ -142,6 +148,11 @@ fn render_impl(deck: &CommandDeck, pdb: &PdbStructure, smooth: bool) -> Result<R
         radtype.push(scaled);
     }
 
+    let max_canvas = if smooth {
+        SMOOTH_MAX_CANVAS
+    } else {
+        LEGACY_MAX_CANVAS
+    };
     let mut xtranc = 0.0_f32;
     let mut ytranc = 0.0_f32;
     let mut ztranc = 0.0_f32;
@@ -204,8 +215,8 @@ fn render_impl(deck: &CommandDeck, pdb: &PdbStructure, smooth: bool) -> Result<R
         }
     }
 
-    ixsize = (ixsize.min(3000) / 2) * 2;
-    iysize = (iysize.min(3000) / 2) * 2;
+    ixsize = (ixsize.min(max_canvas) / 2) * 2;
+    iysize = (iysize.min(max_canvas) / 2) * 2;
     if ixsize <= 0 || iysize <= 0 {
         return Err(IllustrateError::InvalidDimensions {
             width: iysize.max(0) as usize,

@@ -44,7 +44,7 @@
     </div>
 
     <div class="toolbar-group">
-      <button id="btn-export-png" class="btn btn-primary">Export PNG</button>
+      <button id="btn-export-png" class="btn btn-primary" title="Export PNG (Ctrl+E)">Export PNG…</button>
       <button id="btn-export-pnm" class="btn btn-secondary">Export PNM</button>
       <button id="btn-export-inp" class="btn btn-secondary">Export .inp</button>
       <button id="btn-theme" class="btn btn-ghost" title="Toggle light/dark workspace">☀/☾</button>
@@ -324,6 +324,41 @@
     </section>
   </main>
 
+  <div id="export-dialog" class="help-dialog hidden" role="dialog" aria-label="Export PNG">
+    <div class="help-card">
+      <h2>Export PNG</h2>
+      <div class="control-row">
+        <label for="export-size">Size</label>
+        <select id="export-size" class="select full">
+          <option value="1">1× (current canvas)</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+          <option value="custom">Custom width…</option>
+        </select>
+      </div>
+      <div class="control-row hidden" id="export-custom-row">
+        <label for="export-width">Width (px)</label>
+        <input id="export-width" type="number" min="64" max="6000" step="1" class="num-input full" />
+      </div>
+      <div class="control-row">
+        <label for="export-dpi">Resolution (DPI)</label>
+        <select id="export-dpi" class="select full">
+          <option value="72">72 (screen)</option>
+          <option value="150">150</option>
+          <option value="300">300 (print)</option>
+          <option value="600">600</option>
+        </select>
+      </div>
+      <div class="control-row">
+        <label><input id="export-transparent" type="checkbox" checked /> Transparent background</label>
+      </div>
+      <p id="export-summary" class="export-summary"></p>
+      <div class="dialog-actions">
+        <button id="btn-export-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="btn-export-confirm" class="btn btn-primary">Export…</button>
+      </div>
+    </div>
+  </div>
   <div id="help-dialog" class="help-dialog hidden" role="dialog" aria-label="Keyboard shortcuts">
     <div class="help-card">
       <h2>Keyboard shortcuts</h2>
