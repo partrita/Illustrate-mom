@@ -29,14 +29,10 @@
     </div>
 
     <div class="toolbar-group">
-      <label class="inline-label" for="select-preset">Style Preset</label>
-      <select id="select-preset" class="select">
-        <option value="goodsell_classic">Goodsell Classic (2HHB)</option>
-        <option value="subunit_pastel">Subunit Pastel Palette</option>
-        <option value="monochrome_1992">1992 JMolGraphics Ink</option>
-        <option value="cpk_soft">CPK Soft Elements</option>
-      </select>
-      <button id="btn-apply-preset" class="btn btn-secondary">Apply</button>
+      <input id="select-preset" type="hidden" value="goodsell_classic" />
+      <button id="btn-undo" class="btn btn-ghost" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+      <button id="btn-redo" class="btn btn-ghost" title="Redo (Ctrl+Shift+Z)" disabled>↷ Redo</button>
+      <button id="btn-help" class="btn btn-ghost" title="Keyboard shortcuts (?)">?</button>
     </div>
 
     <div class="toolbar-group">
@@ -58,6 +54,17 @@
   <main class="workspace">
     <!-- Left Inspector Panel (with Atom Rules & Command Deck nested inside collapsed accordions) -->
     <aside class="panel panel-left">
+      <details open class="accordion">
+        <summary>Style Presets</summary>
+        <div class="section-body">
+          <div id="preset-gallery" class="preset-gallery">
+            <button class="preset-card active" data-preset="goodsell_classic"><span class="thumb"></span><span class="label">Classic</span></button>
+            <button class="preset-card" data-preset="subunit_pastel"><span class="thumb"></span><span class="label">Subunit Pastel</span></button>
+            <button class="preset-card" data-preset="monochrome_1992"><span class="thumb"></span><span class="label">1992 Ink</span></button>
+            <button class="preset-card" data-preset="cpk_soft"><span class="thumb"></span><span class="label">CPK Soft</span></button>
+          </div>
+        </div>
+      </details>
       <details open class="accordion">
         <summary>Camera &amp; Transform</summary>
         <div class="section-body">
@@ -317,6 +324,19 @@
     </section>
   </main>
 
+  <div id="help-dialog" class="help-dialog hidden" role="dialog" aria-label="Keyboard shortcuts">
+    <div class="help-card">
+      <h2>Keyboard shortcuts</h2>
+      <table>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></td><td>Redo</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Reset rotation</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>E</kbd></td><td>Export PNG</td></tr>
+        <tr><td><kbd>?</kbd></td><td>Show / hide this help</td></tr>
+      </table>
+      <button id="btn-help-close" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>

@@ -11,7 +11,13 @@ const state = {
   renderInFlight: false,
   pendingRender: null,
   previewTimer: null,
+  committed: null,
+  undoStack: [],
+  redoStack: [],
+  thumbToken: 0,
 };
+
+const HISTORY_LIMIT = 50;
 
 const el = (id) => document.getElementById(id);
 
@@ -297,6 +303,7 @@ async function runRender(fastPreview) {
       fastPreview,
     });
     updateViewportImage(resp);
+    if (!fastPreview) commitHistory();
     setStatus(fastPreview ? "Interactive preview…" : "Rendered full quality");
   } catch (err) {
     setStatus(`Error: ${err}`);
@@ -322,13 +329,105 @@ function scheduleRender(fastPreview) {
   }
 }
 
+function updateHistoryButtons() {
+  el("btn-undo").disabled = state.undoStack.length === 0;
+  el("btn-redo").disabled = state.redoStack.length === 0;
+}
+
+function resetHistory() {
+  state.undoStack = [];
+  state.redoStack = [];
+  state.committed = state.deck ? JSON.stringify(state.deck) : null;
+  updateHistoryButtons();
+}
+
+function commitHistory() {
+  if (!state.deck) return;
+  const now = JSON.stringify(state.deck);
+  if (state.committed !== null && now !== state.committed) {
+    state.undoStack.push(state.committed);
+    if (state.undoStack.length > HISTORY_LIMIT) state.undoStack.shift();
+    state.redoStack = [];
+  }
+  state.committed = now;
+  updateHistoryButtons();
+}
+
+function restoreDeck(json) {
+  state.deck = JSON.parse(json);
+  state.committed = json;
+  syncControlsFromDeck();
+  updateHistoryButtons();
+  scheduleRender(false);
+}
+
+function undo() {
+  if (state.undoStack.length === 0 || !state.deck) return;
+  state.redoStack.push(JSON.stringify(state.deck));
+  restoreDeck(state.undoStack.pop());
+  setStatus("Undo");
+}
+
+function redo() {
+  if (state.redoStack.length === 0 || !state.deck) return;
+  state.undoStack.push(JSON.stringify(state.deck));
+  restoreDeck(state.redoStack.pop());
+  setStatus("Redo");
+}
+
+function setActivePreset(id) {
+  el("select-preset").value = id;
+  document.querySelectorAll(".preset-card").forEach((card) => {
+    card.classList.toggle("active", card.dataset.preset === id);
+  });
+}
+
+async function refreshPresetThumbnails() {
+  const token = ++state.thumbToken;
+  const cards = document.querySelectorAll(".preset-card");
+  cards.forEach((c) => c.classList.add("loading"));
+  try {
+    const thumbs = await invoke("preset_thumbnails");
+    if (token !== state.thumbToken) return;
+    thumbs.forEach((t) => {
+      const thumb = document.querySelector(`.preset-card[data-preset="${t.id}"] .thumb`);
+      if (thumb) thumb.style.backgroundImage = `url("${t.data_url}")`;
+    });
+  } catch (_err) {
+    // Thumbnails are decorative; keep placeholders on failure.
+  } finally {
+    if (token === state.thumbToken) {
+      cards.forEach((c) => c.classList.remove("loading"));
+    }
+  }
+}
+
+async function applyPreset(id) {
+  if (!state.deck) {
+    setStatus("Load a PDB or mmCIF file first");
+    return;
+  }
+  try {
+    const snap = await invoke("apply_color_preset", { preset: id });
+    setActivePreset(id);
+    applySnapshot(snap, false);
+    setStatus(`Applied preset: ${document.querySelector(`.preset-card[data-preset="${id}"] .label`).textContent}`);
+  } catch (err) {
+    setStatus(`Preset error: ${err}`);
+  }
+}
+
 function applySnapshot(snapshot, shouldFit = false) {
   state.deck = snapshot.deck;
   state.chains = snapshot.chains;
   syncControlsFromDeck();
   updateViewportImage(snapshot.render);
   if (shouldFit) {
+    resetHistory();
+    refreshPresetThumbnails();
     requestAnimationFrame(fitToStage);
+  } else {
+    commitHistory();
   }
 }
 
@@ -615,20 +714,22 @@ function bindControls() {
     }
   };
 
-  el("btn-apply-preset").onclick = async () => {
-    if (!state.deck) {
-      setStatus("Load a PDB or mmCIF file first");
-      return;
-    }
-    try {
-      const snap = await invoke("apply_color_preset", {
-        preset: el("select-preset").value,
-      });
-      applySnapshot(snap, false);
-      setStatus(`Applied preset: ${el("select-preset").selectedOptions[0].textContent}`);
-    } catch (err) {
-      setStatus(`Preset error: ${err}`);
-    }
+  document.querySelectorAll(".preset-card").forEach((card) => {
+    card.onclick = () => applyPreset(card.dataset.preset);
+  });
+
+  el("btn-undo").onclick = undo;
+  el("btn-redo").onclick = redo;
+
+  const toggleHelp = (show) => {
+    const dlg = el("help-dialog");
+    const visible = show ?? dlg.classList.contains("hidden");
+    dlg.classList.toggle("hidden", !visible);
+  };
+  el("btn-help").onclick = () => toggleHelp();
+  el("btn-help-close").onclick = () => toggleHelp(false);
+  el("help-dialog").onclick = (e) => {
+    if (e.target === el("help-dialog")) toggleHelp(false);
   };
 
   const doExport = async (format) => {
@@ -647,6 +748,36 @@ function bindControls() {
   el("btn-export-png").onclick = () => doExport("png");
   el("btn-export-pnm").onclick = () => doExport("pnm");
   el("btn-export-inp").onclick = () => doExport("inp");
+
+  window.addEventListener("keydown", (e) => {
+    const tag = (e.target.tagName || "").toLowerCase();
+    const typing = tag === "input" || tag === "textarea" || tag === "select";
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    if (mod && key === "z") {
+      if (typing) return;
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+    } else if (mod && key === "y") {
+      if (typing) return;
+      e.preventDefault();
+      redo();
+    } else if (mod && key === "e") {
+      e.preventDefault();
+      doExport("png");
+    } else if (!mod && !typing && key === "r") {
+      if (!state.deck) return;
+      state.deck.euler_deg = [0, 0, 0];
+      syncControlsFromDeck();
+      scheduleRender(false);
+      setStatus("Rotation reset");
+    } else if (!mod && !typing && e.key === "?") {
+      toggleHelp();
+    } else if (e.key === "Escape") {
+      toggleHelp(false);
+    }
+  });
 
   el("btn-theme").onclick = () => {
     const root = document.documentElement;

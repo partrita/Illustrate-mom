@@ -9,7 +9,7 @@ use illustrate::command::{AtomDescriptor, CenterMode, CommandDeck, OutlineParams
 use illustrate::pdb::{inspect_pdb_chains, parse_pdb_reader, resolve_pdb_path};
 use illustrate::pnm::{encode_png_rgb, encode_png_rgba, save_png_file, save_ppm_file};
 use illustrate::presets::{PresetKind, build_preset};
-use illustrate::render::{RenderResult, render_smooth, smooth_canvas_dimensions};
+use illustrate::render::{RenderResult, render, render_smooth, smooth_canvas_dimensions};
 use illustrate::transform::Matrix4;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -141,6 +141,34 @@ pub struct SessionSnapshot {
     pub deck: GuiDeckState,
     pub chains: Vec<char>,
     pub render: RenderResponse,
+}
+
+/// Identifiers of the built-in style presets shown in the preset gallery.
+pub const PRESET_IDS: &[&str] = &[
+    "goodsell_classic",
+    "subunit_pastel",
+    "monochrome_1992",
+    "cpk_soft",
+];
+
+/// Linear downscale factor applied to preset gallery thumbnails.
+const THUMB_FACTOR: f32 = 0.25;
+
+/// Downscales an explicit canvas size or padding value for thumbnail rendering.
+fn scale_canvas_size(size: i32) -> i32 {
+    let scaled = (size as f32 * THUMB_FACTOR) as i32;
+    if size > 0 {
+        scaled.max(32)
+    } else {
+        scaled.min(-2)
+    }
+}
+
+/// Small preview image of one preset applied to the current structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresetThumbnail {
+    pub id: String,
+    pub data_url: String,
 }
 
 /// Mutable server-side studio session protected by a `Mutex` in Tauri state.
@@ -356,6 +384,45 @@ impl StudioSession {
         self.snapshot()
     }
 
+    /// Renders a small thumbnail of the current structure for every built-in preset.
+    ///
+    /// The session state is left untouched; thumbnails use the current camera
+    /// orientation with a reduced scale and no conical shadow.
+    pub fn preset_thumbnails(&self) -> Result<Vec<PresetThumbnail>, String> {
+        if !self.has_structure() {
+            return Err("No molecular structure loaded.".to_string());
+        }
+        let pad = (self.deck_state.world.ixsize, self.deck_state.world.iysize);
+        let mut thumbs = Vec::with_capacity(PRESET_IDS.len());
+        for id in PRESET_IDS {
+            let preset = build_preset(PresetKind::from_id(id), &self.chains, pad);
+            let mut gui = self.deck_state.clone();
+            gui.descriptors = preset
+                .descriptors
+                .iter()
+                .map(AtomDescriptorDto::from)
+                .collect();
+            gui.world = preset.world;
+            gui.outline = preset.outline;
+
+            let mut deck = gui.to_command_deck()?;
+            deck.scale = (deck.scale * THUMB_FACTOR).max(1.0);
+            deck.world.icone = 0;
+            deck.world.ixsize = scale_canvas_size(deck.world.ixsize);
+            deck.world.iysize = scale_canvas_size(deck.world.iysize);
+
+            let pdb = parse_pdb_reader(self.pdb_text.as_bytes(), &deck.descriptors)
+                .map_err(|e| e.to_string())?;
+            let result = render(&deck, &pdb).map_err(|e| e.to_string())?;
+            let png = encode_png_rgba(&result).map_err(|e| e.to_string())?;
+            thumbs.push(PresetThumbnail {
+                id: (*id).to_string(),
+                data_url: format!("data:image/png;base64,{}", BASE64.encode(png)),
+            });
+        }
+        Ok(thumbs)
+    }
+
     /// Applies a color/outline preset to the current PDB structure while keeping camera settings.
     pub fn apply_preset(&mut self, preset_id: &str) -> Result<SessionSnapshot, String> {
         let pad = (self.deck_state.world.ixsize, self.deck_state.world.iysize);
@@ -472,6 +539,12 @@ fn apply_color_preset(
 ) -> Result<SessionSnapshot, String> {
     let mut session = state.0.lock().map_err(|e| e.to_string())?;
     session.apply_preset(&preset)
+}
+
+#[tauri::command]
+async fn preset_thumbnails(state: State<'_, AppState>) -> Result<Vec<PresetThumbnail>, String> {
+    let session = state.0.lock().map_err(|e| e.to_string())?;
+    session.preset_thumbnails()
 }
 
 #[tauri::command]
@@ -593,6 +666,7 @@ pub fn run() {
             parse_and_render_script,
             load_pdb_data,
             apply_color_preset,
+            preset_thumbnails,
             export_output,
             pick_and_load_pdb,
             pick_and_load_script,
@@ -611,6 +685,21 @@ mod tests {
         let mut session = StudioSession::new_empty();
         assert!(!session.has_structure());
         assert!(session.snapshot().is_err());
+    }
+
+    #[test]
+    fn preset_thumbnails_cover_all_presets_without_mutating_session() {
+        let mut session = StudioSession::new_default().expect("default session");
+        let before = session.deck_state.clone();
+        let thumbs = session.preset_thumbnails().expect("thumbnails");
+        assert_eq!(thumbs.len(), PRESET_IDS.len());
+        for (thumb, id) in thumbs.iter().zip(PRESET_IDS) {
+            assert_eq!(thumb.id, *id);
+            assert!(thumb.data_url.starts_with("data:image/png;base64,"));
+        }
+        assert_eq!(session.deck_state, before);
+        assert!(StudioSession::new_empty().preset_thumbnails().is_err());
+        let _ = session.snapshot();
     }
 
     #[test]
