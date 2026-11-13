@@ -970,15 +970,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   bindControls();
   try {
     const snap = await invoke("get_initial_state");
+    const notice = await invoke("take_startup_notice");
     if (snap) {
       applySnapshot(snap, true);
       setStatus("Ready — drag canvas to rotate, Shift+drag to pan, scroll to zoom");
-      const notice = await invoke("take_startup_notice");
-      if (notice) setStatus(notice);
     } else {
       syncEmptyState();
-      setStatus("Open a .pdb, .cif, .mmcif, or .inp file to begin");
+      setStatus("Enter a PDB ID or open a .pdb, .cif, .mmcif, or .inp file to begin");
     }
+    if (notice) setStatus(notice);
   } catch (err) {
     setStatus(`Initialization error: ${err}`);
   }

@@ -19,7 +19,7 @@ Both need capabilities the GUI did not have: outbound network access and writing
 2. **Session persistence is a versioned JSON file in the Tauri app data directory** (`session.json`).
    - Stores: structure name, structure text (a copy, so it survives the original file moving), `GuiDeckState`, and the active preset id.
    - Written when the main window requests close; read at startup.
-   - If the file is missing, unreadable, or has an unknown `version`, the app starts on the bundled `2hhb` example and surfaces a non-blocking notice. No "resume?" prompt is shown.
+   - If the file is missing, unreadable, or has an unknown `version`, the app starts on the empty "load a structure" screen (with a non-blocking notice if the file was broken). No "resume?" prompt is shown.
 3. **Undo history is not persisted.**
 
 ## Consequences

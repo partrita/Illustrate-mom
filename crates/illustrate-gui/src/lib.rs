@@ -318,9 +318,9 @@ impl StudioSession {
         })
     }
 
-    /// Builds the startup session: restores `path` if possible, otherwise the bundled example.
+    /// Builds the startup session: restores `path` if possible, otherwise an empty session.
     ///
-    /// A missing file silently yields the example; a broken one also sets a startup notice.
+    /// A missing file silently yields the empty state; a broken one also sets a startup notice.
     #[must_use]
     pub fn startup(path: Option<&Path>) -> Self {
         let mut notice = None;
@@ -331,12 +331,12 @@ impl StudioSession {
                 Ok(session) => return session,
                 Err(e) => {
                     notice = Some(format!(
-                        "Could not restore the last session ({e}); opened the example instead."
+                        "Could not restore the last session ({e}); starting empty."
                     ));
                 }
             }
         }
-        let mut session = Self::new_default().unwrap_or_else(|_| Self::new_empty());
+        let mut session = Self::new_empty();
         session.startup_notice = notice;
         session
     }
@@ -957,17 +957,17 @@ mod tests {
     }
 
     #[test]
-    fn broken_session_falls_back_to_example_with_notice() {
+    fn broken_session_falls_back_to_empty_with_notice() {
         let path = std::env::temp_dir().join("illustrate_session_broken.json");
         fs::write(&path, "{ not json").expect("write");
         let mut session = StudioSession::startup(Some(&path));
-        assert!(session.has_structure());
+        assert!(!session.has_structure());
         assert!(session.take_startup_notice().is_some());
         assert!(session.take_startup_notice().is_none());
         let _ = fs::remove_file(&path);
 
         let mut fresh = StudioSession::startup(Some(Path::new("/nonexistent/session.json")));
-        assert!(fresh.has_structure());
+        assert!(!fresh.has_structure());
         assert!(fresh.take_startup_notice().is_none());
     }
 
