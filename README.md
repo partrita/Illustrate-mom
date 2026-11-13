@@ -2,16 +2,14 @@
 
 # I L L U S T R A T E
 
-![](./examples/demo.png)
-
 > Biomolecular Non-Photorealistic Illustration (Rust Edition)
 
-Original Fortran implementation copyright 2019 David S. Goodsell.  
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0.
+![](./examples/demo.png)
 
-This work was supported in part by Damon Runyon-Walter Winchell Cancer Research Fund Fellowship DRG 972, the US National Institutes of Health R01-GM120604 and the kind support of the RCSB Protein Data Bank.  
-DS Goodsell & AJ Olson (1992) *"Molecular Illustration in Black and White"* JMolGraphics 10, 235-240.  
-April 2019: Simplified and released with only non-photorealistic rendering.  
+Original Fortran implementation copyright 2019 David S. Goodsell. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0.
+
+This work was supported in part by Damon Runyon-Walter Winchell Cancer Research Fund Fellowship DRG 972, the US National Institutes of Health R01-GM120604 and the kind support of the RCSB Protein Data Bank. DS Goodsell & AJ Olson (1992) *"Molecular Illustration in Black and White"* JMolGraphics 10, 235-240.  
+
 Rewritten in modular, memory-safe Rust with pixel-exact parity against `legacy/illustrate.f`.
 
 ---
@@ -43,7 +41,6 @@ Illustrate-mom/
 └── LICENSE
 ```
 
----
 
 ## Building and Running
 
@@ -64,11 +61,11 @@ cargo test --workspace
 cargo run -p illustrate-gui --release
 ```
 
-Features include clean empty-state startup, dual **PDB** (`.pdb`/`.ent`) and **mmCIF** (`.cif`/`.mmcif`) coordinate loading, interactive drag-to-rotate with fast preview, wheel zoom/pan, **Molecule of the Month** color presets (*Goodsell Classic*, *Subunit Pastel*, *1992 Monochrome Ink*, *CPK Soft*), collapsible `AtomDescriptor` rules and bidirectional `.inp` command deck accordions, RGBA/RGB/Opacity layer switching, and PNG/PNM/`.inp` export.
+Features include clean empty-state startup, dual PDB (`.pdb`/`.ent`) and mmCIF (`.cif`/`.mmcif`) coordinate loading, interactive drag-to-rotate with fast preview, wheel zoom/pan, Molecule of the Month color presets (*Goodsell Classic*, *Subunit Pastel*, *1992 Monochrome Ink*, *CPK Soft*), collapsible `AtomDescriptor` rules and bidirectional `.inp` command deck accordions, RGBA/RGB/Opacity layer switching, and PNG/PNM/`.inp` export.
 
 ### Releasing Desktop GUI via GitHub Actions
 
-Pushing a version tag matching `v*` triggers [release.yml](.github/workflows/release.yml), which builds bundled **Molecule of the Month** installers across Linux (`ubuntu-22.04`), macOS (`universal-apple-darwin`), and Windows (`windows-latest`) and attaches them to a GitHub Release:
+Pushing a version tag matching `v*` triggers [release.yml](.github/workflows/release.yml), which builds bundled Molecule of the Month installers across Linux (`ubuntu-22.04`), macOS (`universal-apple-darwin`), and Windows (`windows-latest`) and attaches them to a GitHub Release:
 
 ```bash
 git tag v0.1.0
@@ -107,17 +104,17 @@ Selection/rendering cards in the `read` command are read sequentially until `END
 
 ## Command Card Reference
 
-- **`READ`**: PDB filename, followed by selection/rendering cards (`record_name[6]`, `atom_descriptor[10]` with `-` wildcard, `res_low`, `res_high`, `r`, `g`, `b`, `radius`; `radius = 0.0` omits matching atoms).
-- **`CENTER`**: `auto` (autocenter without clipping at `z = 0`) or `center` (center on min/max x, y, z).
-- **`TRANSLATE`**: `x, y, z` translation in Angstroms.
-- **`XROT`, `YROT`, `ZROT`**: rotation angle in degrees.
-- **`SCALE`**: scale value in pixels/Angstrom.
-- **`WORLD`**:
+- `READ`: PDB filename, followed by selection/rendering cards (`record_name[6]`, `atom_descriptor[10]` with `-` wildcard, `res_low`, `res_high`, `r`, `g`, `b`, `radius`; `radius = 0.0` omits matching atoms).
+- `CENTER`: `auto` (autocenter without clipping at `z = 0`) or `center` (center on min/max x, y, z).
+- `TRANSLATE`: `x, y, z` translation in Angstroms.
+- `XROT`, `YROT`, `ZROT`: rotation angle in degrees.
+- `SCALE`: scale value in pixels/Angstrom.
+- `WORLD`:
   - Line 1: `rback[3]`, `rfog[3]`, `pfogh`, `pfogl` (`0.0–1.0`, `1.0` = no fog)
   - Line 2: `icone` (`0` off / non-zero on), `pcone`, `coneangle`, `rcone`, `pshadowmax`
   - Line 3: `ixsize`, `iysize` (negative values trigger autosizing with padding)
-- **`ILLUSTRATE`**:
+- `ILLUSTRATE`:
   - Line 1: `l_low`, `l_high`, `ikernel` (`1..=4`), `l_diff_min`, `l_diff_max`
   - Line 2: `r_low`, `r_high` (subunit outlines)
   - Line 3: `g_low`, `g_high`, `resdiff` (residue outlines)
-- **`CALCULATE`**: Output PPM filename.
+- `CALCULATE`: Output PPM filename.
